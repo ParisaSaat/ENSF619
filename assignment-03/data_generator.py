@@ -1,72 +1,39 @@
-import numpy as np
+import os
+
 import nibabel as nib
-import matplotlib.pylab as plt
-from tensorflow import keras
-from tensorflow.keras import backend as K
-import h5py
-import glob
+import numpy as np
+from torch.utils.data import Dataset
 
 
-class DataGeneratorUnet(keras.utils.Sequence):
-    'Generates data for Keras'
+class BrainMRI2D(Dataset):
+    def __init__(self, img_root_dir, gt_root_dir=None, file_ids=None, transform=None, labeled=True):
+        self.img_root_dir = img_root_dir
+        self.gt_root_dir = gt_root_dir
+        self.file_ids = file_ids
+        self.transform = transform
+        self.labeled = labeled
 
-    def __init__(self, imgs_list, masks_list, patch_size=(128, 128), batch_size=32, shuffle=True):
+        self.pairs_path = []
+        for file_id in self.file_ids:
+            img_path = os.path.join(self.img_root_dir, file_id)
+            gt_path = os.path.join(self.gt_root_dir, file_id) if self.labeled else None
+            self.pairs_path.append((img_path, gt_path))
 
-        self.imgs_list = imgs_list
-        self.masks_list = masks_list
-        self.patch_size = patch_size
-        self.batch_size = batch_size
-        self.nsamples = len(imgs_list)
-        self.shuffle = True
-        self.on_epoch_end()
+    def __getitem__(self, idx):
+        img_path, mask_path = self.pairs_path[idx]
+        nifti_image = nib.load(img_path)
+        image_affine = nifti_image.affine
+        image = nifti_image.get_fdata(dtype=np.float32)
+        nifti_mask = nib.load(mask_path)
+        mask = nifti_mask.get_fdata(dtype=np.float32)
+        mask_affine = nifti_mask.affine
+
+        if self.transform:
+            transformed = self.transform(image=image, mask=mask)
+            image = transformed.get('image')
+            mask = transformed.get('mask')
+        sample = {'image': image, 'mask': mask, 'mask_affine': mask_affine, 'image_affine': image_affine, 'idx': idx}
+        return sample
 
     def __len__(self):
-        'Denotes the number of batches per epoch'
-        return len(self.imgs_list) // self.batch_size
-
-    def __getitem__(self, index):
-        'Generate one batch of data'
-
-        # Generate indexes of the batch
-        batch_indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-
-        # Generate data
-        X, Y = self.__data_generation(batch_indexes)
-
-        return X, Y
-
-    def on_epoch_end(self):
-        'Updates indexes after each epoch'
-        self.indexes = np.arange(self.nsamples)
-        if self.shuffle == True:
-            np.random.shuffle(self.indexes)
-
-    def __data_generation(self, batch_indexes):
-        'Generates data containing batch_size samples'
-
-        # Initialization
-        X = np.empty((self.batch_size, self.patch_size[0], self.patch_size[1], 1))
-        Y = np.empty((self.batch_size, self.patch_size[0], self.patch_size[1], 1))
-
-        for (jj, ii) in enumerate(batch_indexes):
-            aux_img = np.load(self.imgs_list[ii])
-            aux_mask = np.load(self.masks_list[ii])
-
-            # Implement data augmentation function
-
-            aux_img_patch, aux_mask_patch = self.__extract_patch(aux_img, aux_mask)
-
-            X[jj, :, :, 0] = aux_img_patch
-            Y[jj, :, :, 0] = aux_mask_patch
-
-        return X, Y
-
-    def __extract_patch(self, img, mask):
-        crop_idx = [None] * 2
-        crop_idx[0] = np.random.randint(0, img.shape[0] - self.patch_size[0])
-        crop_idx[1] = np.random.randint(0, img.shape[1] - self.patch_size[1])
-        img_cropped = img[crop_idx[0]:crop_idx[0] + self.patch_size[0], \
-                      crop_idx[1]:crop_idx[1] + self.patch_size[1]]
-        mask_cropped = mask[crop_idx[0]:crop_idx[0] + self.patch_size[0], \
-                       crop_idx[1]:crop_idx[1] + self.patch_size[1]]
-        return img_cropped, mask_cropped
+        return len(self.pairs_path)
